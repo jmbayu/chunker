@@ -1,6 +1,6 @@
 # main.py
 from tree_sitter_languages import get_parser
-from treesitter_chunker import HybridChunkPipeline
+from treesitter_chunker import CodeChunker
 
 example_file_path = "./example.py"
 
@@ -9,7 +9,7 @@ parser = get_parser("python")
 with open(example_file_path) as f:
     source = f.read()
 
-pipeline = HybridChunkPipeline(
+pipeline = CodeChunker(
     parser=parser,
     language_name="python",
     source=source,

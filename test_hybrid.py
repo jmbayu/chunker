@@ -1,6 +1,6 @@
 import unittest
 from tree_sitter_languages import get_parser
-from treesitter_chunker import HybridChunkPipeline
+from treesitter_chunker import CodeChunker
 
 class TestHybridChunker(unittest.TestCase):
     def test_user_example(self):
@@ -19,7 +19,7 @@ if __name__ == "__main__":
 """
 
         parser = get_parser("python")
-        pipeline = HybridChunkPipeline(
+        pipeline = CodeChunker(
             parser=parser,
             language_name="python",
             source=source,
@@ -75,7 +75,7 @@ def main():
     return internal()"""
 
         parser = get_parser("python")
-        pipeline = HybridChunkPipeline(
+        pipeline = CodeChunker(
             parser=parser,
             language_name="python",
             source=source,
