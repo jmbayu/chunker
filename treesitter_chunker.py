@@ -150,3 +150,80 @@ class TreeSitterChunker:
                 "end_byte": node.end_byte,
             }
         )
+
+
+class HybridChunkPipeline:
+    def __init__(
+        self,
+        parser,
+        language_name: str,
+        source: str,
+        file_path: str | None = None,
+    ):
+        self.parser = parser
+        self.language_name = language_name
+        self.source_str = source
+        self.source_bytes = source.encode()
+        self.file_path = file_path
+        self.rules = LANGUAGE_RULES.get(language_name, {})
+        self.tree = self.parser.parse(self.source_bytes)
+        self.chunks = []
+        self.placeholder_idx = 0
+
+    def _get_placeholder(self) -> str:
+        predefined = ["abc", "xyz", "def", "ghi"]
+        if self.placeholder_idx < len(predefined):
+            p = predefined[self.placeholder_idx]
+        else:
+            p = f"id_{self.placeholder_idx}"
+        self.placeholder_idx += 1
+        return p
+
+    def run(self) -> List[CodeChunk]:
+        self.chunks = []
+        self.placeholder_idx = 0
+        root_text = self._traverse(self.tree.root_node)
+
+        root_chunk = CodeChunk(
+            text=root_text,
+            metadata={"type": "file", "file": self.file_path}
+        )
+        return [root_chunk] + list(reversed(self.chunks))
+
+    def _traverse(self, node) -> str:
+        if node.type == self.rules.get("function") or node.type == self.rules.get("class"):
+            block_node = next((c for c in node.children if c.type == self.rules.get("block")), None)
+            if block_node:
+                processed_body = ""
+                last_end = block_node.start_byte
+                for child in block_node.children:
+                    processed_body += self.source_str[last_end:child.start_byte]
+                    processed_body += self._traverse(child)
+                    last_end = child.end_byte
+                processed_body += self.source_str[last_end:block_node.end_byte]
+
+                header = self.source_str[node.start_byte:block_node.start_byte]
+                full_text = header + processed_body
+
+                self.chunks.append(CodeChunk(text=full_text, metadata={"type": node.type, "file": self.file_path}))
+
+                p = self._get_placeholder()
+
+                # If header ends with whitespace (indentation), just append placeholder.
+                # Otherwise, add some indentation.
+                if header.endswith(" "):
+                    return header + "-> chunk " + p + "\n"
+                else:
+                    return header + "    -> chunk " + p + "\n"
+
+        if node.child_count == 0:
+            return self.source_str[node.start_byte:node.end_byte]
+
+        res = ""
+        last_end = node.start_byte
+        for child in node.children:
+            res += self.source_str[last_end:child.start_byte]
+            res += self._traverse(child)
+            last_end = child.end_byte
+        res += self.source_str[last_end:node.end_byte]
+        return res
