@@ -1,5 +1,4 @@
-# treesitter_chunker.py
-from typing import List
+from typing import List, Dict, Any
 from chunks import CodeChunk
 
 MAX_TOKENS = 400
@@ -7,18 +6,35 @@ MAX_TOKENS = 400
 
 LANGUAGE_RULES = {
     "python": {
-        "function": "function_definition",
-        "class": "class_definition",
+        "function": ["function_definition"],
+        "class": ["class_definition"],
+        "nested_blocks": [
+            "function_definition",
+            "class_definition",
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "with_statement",
+            "try_statement",
+        ],
         "import": [
             "import_statement",
             "import_from_statement",
         ],
-        "block": "block",
+        "block": ["block"],
     },
     "javascript": {
-        "function": "function_declaration",
-        "class": "class_declaration",
-        "block": "statement_block",
+        "function": ["function_declaration"],
+        "class": ["class_declaration"],
+        "nested_blocks": [
+            "function_declaration",
+            "class_declaration",
+            "if_statement",
+            "for_statement",
+            "while_statement",
+            "try_statement",
+        ],
+        "block": ["statement_block"],
     },
 }
 
@@ -28,16 +44,16 @@ def estimate_tokens(text: str) -> int:
 class TreeSitterChunker:
     def __init__(
         self,
-        parser,              # <-- parser, not Language
+        parser,
         language_name: str,
         source: str,
         file_path: str | None = None,
     ):
         self.parser = parser
         self.rules = LANGUAGE_RULES[language_name]
-        self.source = source.encode()
+        self.source_bytes = source.encode("utf-8")
         self.text = source
-        self.tree = self.parser.parse(self.source)
+        self.tree = self.parser.parse(self.source_bytes)
         self.file_path = file_path
 
     def chunk(self) -> List[CodeChunk]:
@@ -45,12 +61,12 @@ class TreeSitterChunker:
         root = self.tree.root_node
 
         for node in root.children:
-            if node.type == self.rules["function"]:
+            if node.type in self.rules["function"]:
                 chunks.extend(self._chunk_function(node))
 
             elif (
                 self.rules.get("class")
-                and node.type == self.rules["class"]
+                and node.type in self.rules["class"]
             ):
                 chunks.append(self._make_chunk(node, "class"))
 
@@ -78,8 +94,9 @@ class TreeSitterChunker:
         header_end = None
         body_node = None
 
+        block_types = self.rules["block"]
         for child in node.children:
-            if child.type == self.rules["block"]:
+            if child.type in block_types:
                 body_node = child
                 header_end = child.start_byte
                 break
@@ -87,14 +104,14 @@ class TreeSitterChunker:
         if not body_node:
             return [self._make_chunk(node, "function")]
 
-        header_text = self.text[node.start_byte:header_end]
+        header_text = self.source_bytes[node.start_byte:header_end].decode("utf-8")
         current_chunk_text = header_text
         last_stmt_end = header_end
         part = 1
 
         for stmt in body_node.children:
             # Include everything from the end of the last statement (or header) to the end of this statement
-            stmt_full_text = self.text[last_stmt_end:stmt.end_byte]
+            stmt_full_text = self.source_bytes[last_stmt_end:stmt.end_byte].decode("utf-8")
 
             if estimate_tokens(current_chunk_text + stmt_full_text) > MAX_TOKENS:
                 if current_chunk_text != header_text:
@@ -138,7 +155,7 @@ class TreeSitterChunker:
     # Helpers
     # ---------------------------
     def _node_text(self, node) -> str:
-        return self.text[node.start_byte:node.end_byte]
+        return self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
 
     def _make_chunk(self, node, chunk_type: str) -> CodeChunk:
         return CodeChunk(
@@ -150,3 +167,94 @@ class TreeSitterChunker:
                 "end_byte": node.end_byte,
             }
         )
+
+class HybridChunkPipeline:
+    def __init__(self, parser, language_name: str, source: str, file_path: str | None = None):
+        self.parser = parser
+        self.language_name = language_name
+        self.source_bytes = source.encode("utf-8")
+        self.file_path = file_path
+        self.tree = self.parser.parse(self.source_bytes)
+        self.rules = LANGUAGE_RULES.get(language_name, LANGUAGE_RULES["python"])
+        self.chunks = []
+        self.chunk_counter = 0
+
+    def chunk(self) -> List[CodeChunk]:
+        self.chunks = []
+        self.chunk_counter = 0
+        root_node = self.tree.root_node
+
+        children = [c for c in root_node.children if c.type != 'ERROR']
+        notable_types = self.rules.get("function", []) + self.rules.get("class", [])
+
+        if len(children) == 1 and children[0].type in notable_types:
+            root_content = self._recursive_chunk(children[0])
+            root_chunk = CodeChunk(text=root_content, metadata={"type": "root", "file": self.file_path})
+            self.chunks.append(root_chunk)
+        else:
+            root_text = ""
+            last_end = 0
+            for node in children:
+                root_text += self.source_bytes[last_end:node.start_byte].decode("utf-8")
+                if node.type in notable_types:
+                    root_text += self._process_as_nested(node)
+                else:
+                    root_text += self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
+                last_end = node.end_byte
+            root_text += self.source_bytes[last_end:].decode("utf-8")
+
+            root_chunk = CodeChunk(text=root_text, metadata={"type": "root", "file": self.file_path})
+            self.chunks.append(root_chunk)
+
+        def sort_key(c):
+            if c.metadata.get("type") == "root":
+                return -1
+            chunk_id = c.metadata.get("id", "")
+            return int(chunk_id.split("_")[1]) if chunk_id.startswith("chunk_") else 999999
+
+        self.chunks.sort(key=sort_key)
+        return self.chunks
+
+    def _process_as_nested(self, node) -> str:
+        chunk_id = f"chunk_{self.chunk_counter}"
+        self.chunk_counter += 1
+
+        header = self._get_header(node)
+        placeholder = f"{header.rstrip()} -> {chunk_id}"
+
+        content = self._recursive_chunk(node)
+        self.chunks.append(CodeChunk(text=content, metadata={"id": chunk_id, "type": node.type, "file": self.file_path}))
+
+        return placeholder
+
+    def _recursive_chunk(self, node) -> str:
+        nested_types = self.rules.get("nested_blocks", [])
+        to_chunk = []
+
+        def find_to_chunk(curr):
+            if curr != node and curr.type in nested_types:
+                to_chunk.append(curr)
+                return
+            for child in curr.children:
+                find_to_chunk(child)
+
+        find_to_chunk(node)
+
+        res = ""
+        curr_pos = node.start_byte
+        for tc_node in to_chunk:
+            if tc_node.start_byte < curr_pos:
+                continue
+            res += self.source_bytes[curr_pos:tc_node.start_byte].decode("utf-8")
+            res += self._process_as_nested(tc_node)
+            curr_pos = tc_node.end_byte
+        res += self.source_bytes[curr_pos:node.end_byte].decode("utf-8")
+
+        return res
+
+    def _get_header(self, node) -> str:
+        block_types = self.rules.get("block", [])
+        for child in node.children:
+            if child.type in block_types:
+                return self.source_bytes[node.start_byte:child.start_byte].decode("utf-8")
+        return self.source_bytes[node.start_byte:node.end_byte].decode("utf-8").split('\n')[0]

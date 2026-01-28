@@ -1,6 +1,6 @@
 # main.py
-from tree_sitter_language_pack import get_parser
-from treesitter_chunker import TreeSitterChunker
+from tree_sitter_languages import get_parser
+from treesitter_chunker import HybridChunkPipeline
 
 example_file_path = "./example.py"
 
@@ -9,7 +9,7 @@ parser = get_parser("python")
 with open(example_file_path) as f:
     source = f.read()
 
-pipeline = TreeSitterChunker(
+pipeline = HybridChunkPipeline(
     parser=parser,
     language_name="python",
     source=source,
@@ -19,6 +19,6 @@ pipeline = TreeSitterChunker(
 chunks = pipeline.chunk()
 
 for c in chunks:
-    print("METADATA:", c.metadata)
+    print(f"METADATA: {c.metadata}")
     print(c.text)
     print("=" * 50)
