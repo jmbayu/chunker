@@ -1,6 +1,6 @@
 import unittest
 from tree_sitter_languages import get_parser
-from treesitter_chunker import HybridChunkPipeline
+from treesitter_chunker import CodeChunker
 
 class TestHybridChunker(unittest.TestCase):
     def test_user_example(self):
@@ -19,7 +19,7 @@ if __name__ == "__main__":
 """
 
         parser = get_parser("python")
-        pipeline = HybridChunkPipeline(
+        pipeline = CodeChunker(
             parser=parser,
             language_name="python",
             source=source,
@@ -35,15 +35,9 @@ if __name__ == "__main__":
         self.assertEqual(len(chunks), 3)
 
         # Chunk 0: Root
-        # Note: the placeholder will be "def main(): -> chunk_0"
-        # The source has "def main():\n"
-        # _get_header returns "def main():\n    " (because the block starts with indentation)
-        # .rstrip() makes it "def main():"
-
         expected_chunk_0 = """import os
 
-def main():
-    -> chunk_0
+def main(): -> chunk_0
 
 if __name__ == "__main__":
     main()
@@ -53,8 +47,7 @@ if __name__ == "__main__":
         # Chunk 1: main
         expected_chunk_1 = """
 def main():
-    def helper():
-        -> chunk_1
+    def helper(): -> chunk_1
 
     x = helper()
     print(x)
@@ -75,7 +68,7 @@ def main():
     return internal()"""
 
         parser = get_parser("python")
-        pipeline = HybridChunkPipeline(
+        pipeline = CodeChunker(
             parser=parser,
             language_name="python",
             source=source,
@@ -85,7 +78,7 @@ def main():
 
         self.assertEqual(len(chunks), 2)
         # Check root chunk has placeholder
-        self.assertIn("def internal():\n        -> chunk_0", chunks[0].text)
+        self.assertIn("def internal(): -> chunk_0", chunks[0].text)
         # Check internal chunk has correct content
         self.assertIn('return "👋"', chunks[1].text)
 
