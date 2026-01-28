@@ -188,7 +188,7 @@ class HybridChunkPipeline:
         notable_types = self.rules.get("function", []) + self.rules.get("class", [])
 
         if len(children) == 1 and children[0].type in notable_types:
-            root_content = self._recursive_chunk(children[0])
+            root_content = self._recursive_chunk(children[0], is_nested=False)
             root_chunk = CodeChunk(text=root_content, metadata={"type": "root", "file": self.file_path})
             self.chunks.append(root_chunk)
         else:
@@ -197,7 +197,7 @@ class HybridChunkPipeline:
             for node in children:
                 root_text += self.source_bytes[last_end:node.start_byte].decode("utf-8")
                 if node.type in notable_types:
-                    root_text += self._process_as_nested(node)
+                    root_text += self._process_as_nested(node, is_nested=False)
                 else:
                     root_text += self.source_bytes[node.start_byte:node.end_byte].decode("utf-8")
                 last_end = node.end_byte
@@ -206,28 +206,59 @@ class HybridChunkPipeline:
             root_chunk = CodeChunk(text=root_text, metadata={"type": "root", "file": self.file_path})
             self.chunks.append(root_chunk)
 
-        def sort_key(c):
-            if c.metadata.get("type") == "root":
-                return -1
-            chunk_id = c.metadata.get("id", "")
-            return int(chunk_id.split("_")[1]) if chunk_id.startswith("chunk_") else 999999
-
-        self.chunks.sort(key=sort_key)
+        self.chunks.sort(key=lambda c: -1 if c.metadata.get("type") == "root" else 
+                         int(c.metadata.get("id", "chunk_999999").split("_")[1]))
         return self.chunks
 
-    def _process_as_nested(self, node) -> str:
+    def _process_as_nested(self, node, is_nested: bool) -> str:
         chunk_id = f"chunk_{self.chunk_counter}"
         self.chunk_counter += 1
 
         header = self._get_header(node)
-        placeholder = f"{header.rstrip()} -> {chunk_id}"
+        placeholder = f"{header}-> {chunk_id}"
 
-        content = self._recursive_chunk(node)
+        content = self._recursive_chunk(node, is_nested=True)
+        
+        # Dedent nested functions to remove parent indentation
+        if is_nested:
+            content = self._dedent(content)
+            
         self.chunks.append(CodeChunk(text=content, metadata={"id": chunk_id, "type": node.type, "file": self.file_path}))
-
         return placeholder
 
-    def _recursive_chunk(self, node) -> str:
+    def _dedent(self, text: str) -> str:
+        """Remove common indentation from all lines except the first."""
+        lines = text.split('\n')
+        if len(lines) <= 1:
+            return text
+        
+        # Find indentation of the second line (first line of body)
+        # This is the base indentation we want to keep
+        body_indent = None
+        for line in lines[1:]:
+            if line.strip():
+                body_indent = len(line) - len(line.lstrip(' '))
+                break
+        
+        if body_indent is None or body_indent == 0:
+            return text
+        
+        # Calculate how much to dedent: we want to reduce by 4 spaces
+        # (the parent function's indentation level)
+        dedent_amount = 4
+        
+        # Remove dedent_amount from all lines except first
+        result = [lines[0]]
+        for line in lines[1:]:
+            if line.strip():
+                spaces = len(line) - len(line.lstrip(' '))
+                result.append(line[min(dedent_amount, spaces):])
+            else:
+                result.append(line)
+        
+        return '\n'.join(result)
+
+    def _recursive_chunk(self, node, is_nested: bool) -> str:
         nested_types = self.rules.get("nested_blocks", [])
         to_chunk = []
 
@@ -246,7 +277,7 @@ class HybridChunkPipeline:
             if tc_node.start_byte < curr_pos:
                 continue
             res += self.source_bytes[curr_pos:tc_node.start_byte].decode("utf-8")
-            res += self._process_as_nested(tc_node)
+            res += self._process_as_nested(tc_node, is_nested=True)
             curr_pos = tc_node.end_byte
         res += self.source_bytes[curr_pos:node.end_byte].decode("utf-8")
 

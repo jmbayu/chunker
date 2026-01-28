@@ -14,7 +14,9 @@ def main():
     x = helper()
     print(x)
 
-if name == "main": main() """
+if __name__ == "__main__":
+    main()
+"""
 
         parser = get_parser("python")
         pipeline = HybridChunkPipeline(
@@ -40,22 +42,29 @@ if name == "main": main() """
 
         expected_chunk_0 = """import os
 
-def main(): -> chunk_0
+def main():
+    -> chunk_0
 
-if name == "main": main() """
+if __name__ == "__main__":
+    main()
+"""
         self.assertEqual(chunks[0].text.strip(), expected_chunk_0.strip())
 
         # Chunk 1: main
-        expected_chunk_1 = """def main():
-    def helper(): -> chunk_1
+        expected_chunk_1 = """
+def main():
+    def helper():
+        -> chunk_1
 
     x = helper()
-    print(x)"""
+    print(x)
+"""
         self.assertEqual(chunks[1].text.strip(), expected_chunk_1.strip())
 
         # Chunk 2: helper
         expected_chunk_2 = """def helper():
-        return 42"""
+    return 42"""
+
         self.assertEqual(chunks[2].text.strip(), expected_chunk_2.strip())
 
     def test_multibyte_characters(self):
@@ -76,7 +85,7 @@ if name == "main": main() """
 
         self.assertEqual(len(chunks), 2)
         # Check root chunk has placeholder
-        self.assertIn("def internal(): -> chunk_0", chunks[0].text)
+        self.assertIn("def internal():\n        -> chunk_0", chunks[0].text)
         # Check internal chunk has correct content
         self.assertIn('return "👋"', chunks[1].text)
 
