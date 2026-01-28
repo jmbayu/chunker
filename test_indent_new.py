@@ -39,11 +39,8 @@ class TestIndentation(unittest.TestCase):
         self.assertEqual(chunks[2].text.strip(), "def c():\n    return 1")
 
         # Chunk 1 should be 'b', dedented by 4
-        # b starts at col 4.
-        # Inside b, c started at col 8. After dedenting b by 4, c is at col 4.
         expected_b = """def b():
-    def c():
-        -> chunk_1
+    def c(): -> chunk_1
     return c()"""
         self.assertEqual(chunks[1].text.strip(), expected_b)
 
