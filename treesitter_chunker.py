@@ -87,24 +87,50 @@ class TreeSitterChunker:
         if not body_node:
             return [self._make_chunk(node, "function")]
 
-        header = self.text[node.start_byte:header_end]
-
+        header_text = self.text[node.start_byte:header_end]
+        current_chunk_text = header_text
+        last_stmt_end = header_end
         part = 1
-        for stmt in body_node.children:
-            candidate = header + self._node_text(stmt)
 
-            if estimate_tokens(candidate) > MAX_TOKENS:
-                chunks.append(
-                    CodeChunk(
-                        text=candidate,
-                        metadata={
-                            "type": "function_part",
-                            "part": part,
-                            "file": self.file_path,
-                        }
+        for stmt in body_node.children:
+            # Include everything from the end of the last statement (or header) to the end of this statement
+            stmt_full_text = self.text[last_stmt_end:stmt.end_byte]
+
+            if estimate_tokens(current_chunk_text + stmt_full_text) > MAX_TOKENS:
+                if current_chunk_text != header_text:
+                    # Emit current chunk
+                    chunks.append(
+                        CodeChunk(
+                            text=current_chunk_text,
+                            metadata={
+                                "type": "function_part",
+                                "part": part,
+                                "file": self.file_path,
+                            }
+                        )
                     )
+                    part += 1
+                    # Start new chunk with header and this statement
+                    current_chunk_text = header_text + stmt_full_text
+                else:
+                    # First statement is already too big, we must include it
+                    current_chunk_text += stmt_full_text
+            else:
+                current_chunk_text += stmt_full_text
+
+            last_stmt_end = stmt.end_byte
+
+        if current_chunk_text != header_text:
+            chunks.append(
+                CodeChunk(
+                    text=current_chunk_text,
+                    metadata={
+                        "type": "function_part",
+                        "part": part,
+                        "file": self.file_path,
+                    }
                 )
-                part += 1
+            )
 
         return chunks
 
